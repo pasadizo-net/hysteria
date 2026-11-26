@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -21,7 +22,13 @@ const (
 	DirectOutboundMode4                              // Use IPv4 only, fail if not available
 
 	defaultDialerTimeout = 10 * time.Second
+
+	// The most host names a UDP connection keeps the resolved address of
+	maxUDPResolvedHosts = 256
 )
+
+// lookupIP resolves host names for directOutbound; tests replace it.
+var lookupIP = net.LookupIP
 
 const (
 	udpConnStateDualStack udpConnState = iota
@@ -184,7 +191,7 @@ func NewDirectOutboundBindToDevice(mode DirectOutboundMode, deviceName string) (
 // resolve is our built-in DNS resolver for handling the case when
 // AddrEx.ResolveInfo is nil.
 func (d *directOutbound) resolve(reqAddr *AddrEx) {
-	ips, err := net.LookupIP(reqAddr.Host)
+	ips, err := lookupIP(reqAddr.Host)
 	if err != nil {
 		reqAddr.ResolveInfo = &ResolveInfo{Err: err}
 		return
@@ -299,6 +306,12 @@ type directOutboundUDPConn struct {
 	// The last address converted in each direction, as it rarely changes between packets
 	lastRead  atomic.Pointer[directOutboundUDPRead]
 	lastWrite atomic.Pointer[directOutboundUDPWrite]
+
+	// The address each host name resolved to the first time it was written to.
+	// A name with several addresses must not spread the packets of one flow over
+	// them (a QUIC handshake breaks), so it is resolved once per connection.
+	resolvedMutex sync.Mutex
+	resolved      map[string]netip.Addr
 }
 
 type directOutboundUDPRead struct {
@@ -333,31 +346,61 @@ func (u *directOutboundUDPConn) ReadFrom(b []byte) (int, *AddrEx, error) {
 }
 
 func (u *directOutboundUDPConn) WriteTo(b []byte, addr *AddrEx) (int, error) {
-	// Only IP literals are cached, host names are resolved every time
-	isLiteral := false
-	if addr.ResolveInfo == nil {
-		last := u.lastWrite.Load()
-		if last != nil && last.Host == addr.Host && last.Port == addr.Port {
-			return u.UDPConn.WriteToUDPAddrPort(b, last.AddrPort)
+	if addr.ResolveInfo != nil {
+		ip, err := u.selectIP(addr.ResolveInfo)
+		if err != nil {
+			return 0, err
 		}
-		isLiteral = tryParseIP(addr)
+		return u.UDPConn.WriteToUDPAddrPort(b, netip.AddrPortFrom(ipToNetipAddr(ip), addr.Port))
+	}
+	last := u.lastWrite.Load()
+	if last != nil && last.Host == addr.Host && last.Port == addr.Port {
+		return u.UDPConn.WriteToUDPAddrPort(b, last.AddrPort)
+	}
+	ip, ok := u.loadResolved(addr.Host)
+	if !ok {
+		isLiteral := tryParseIP(addr)
 		if !isLiteral {
 			u.directOutbound.resolve(addr)
 		}
+		// A failed resolution is not kept, the next packet resolves again
+		netIP, err := u.selectIP(addr.ResolveInfo)
+		if err != nil {
+			return 0, err
+		}
+		ip = ipToNetipAddr(netIP)
+		if !isLiteral {
+			u.storeResolved(addr.Host, ip)
+		}
 	}
-	ip, err := u.selectIP(addr.ResolveInfo)
-	if err != nil {
-		return 0, err
+	last = &directOutboundUDPWrite{
+		Host:     addr.Host,
+		Port:     addr.Port,
+		AddrPort: netip.AddrPortFrom(ip, addr.Port),
 	}
-	addrPort := netip.AddrPortFrom(ipToNetipAddr(ip), addr.Port)
-	if isLiteral {
-		u.lastWrite.Store(&directOutboundUDPWrite{
-			Host:     addr.Host,
-			Port:     addr.Port,
-			AddrPort: addrPort,
-		})
+	u.lastWrite.Store(last)
+	return u.UDPConn.WriteToUDPAddrPort(b, last.AddrPort)
+}
+
+func (u *directOutboundUDPConn) loadResolved(host string) (netip.Addr, bool) {
+	u.resolvedMutex.Lock()
+	defer u.resolvedMutex.Unlock()
+	ip, ok := u.resolved[host]
+	return ip, ok
+}
+
+func (u *directOutboundUDPConn) storeResolved(host string, ip netip.Addr) {
+	u.resolvedMutex.Lock()
+	defer u.resolvedMutex.Unlock()
+	if u.resolved == nil {
+		u.resolved = make(map[string]netip.Addr, 4)
+	} else if len(u.resolved) >= maxUDPResolvedHosts {
+		for k := range u.resolved {
+			delete(u.resolved, k)
+			break
+		}
 	}
-	return u.UDPConn.WriteToUDPAddrPort(b, addrPort)
+	u.resolved[host] = ip
 }
 
 // selectIP picks the resolved IP to send to, based on the socket's address family and the outbound mode.
