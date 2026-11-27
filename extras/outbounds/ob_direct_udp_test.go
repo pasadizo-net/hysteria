@@ -4,6 +4,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -82,6 +83,96 @@ func TestDirectOutboundUDPAddressErrors(t *testing.T) {
 		ResolveInfo: &ResolveInfo{Err: assert.AnError},
 	})
 	assert.ErrorIs(t, err, resolveError{Err: assert.AnError})
+}
+
+// fakeLookupIP replaces lookupIP for the test with answers that change on every
+// lookup of a name, as a name with several addresses does, and counts the lookups.
+func fakeLookupIP(t *testing.T, answers map[string][][]net.IP) map[string]int {
+	counts := make(map[string]int)
+	lookupIP = func(host string) ([]net.IP, error) {
+		i := counts[host]
+		counts[host]++
+		if a := answers[host]; len(a) > 0 && a[i%len(a)] != nil {
+			return a[i%len(a)], nil
+		}
+		return nil, assert.AnError
+	}
+	t.Cleanup(func() { lookupIP = net.LookupIP })
+	return counts
+}
+
+// Every packet of a connection to a host name goes to the address it resolved to first.
+func TestDirectOutboundUDPResolveOnce(t *testing.T) {
+	loopback := []net.IP{net.IPv4(127, 0, 0, 1)}
+	unreachable := []net.IP{net.IPv4(192, 0, 2, 1)} // TEST-NET-1, where no test peer listens
+	counts := fakeLookupIP(t, map[string][][]net.IP{
+		"a.test": {loopback, unreachable},
+		"b.test": {loopback, unreachable},
+	})
+
+	ob := NewDirectOutboundSimple(DirectOutboundModeAuto)
+	conn, err := ob.UDP(&AddrEx{Host: "a.test", Port: 1})
+	require.NoError(t, err)
+	defer conn.Close()
+
+	peerA, portA := udpTestPeer(t, "udp4", "127.0.0.1:0")
+	peerB, portB := udpTestPeer(t, "udp4", "127.0.0.1:0")
+
+	buf := make([]byte, 1024)
+	// Names interleaved with each other, with an IP literal, and with other ports
+	for i, tt := range []struct {
+		peer *net.UDPConn
+		host string
+		port uint16
+	}{
+		{peerA, "a.test", portA},
+		{peerA, "a.test", portA},
+		{peerB, "b.test", portB},
+		{peerA, "a.test", portA},
+		{peerB, "127.0.0.1", portB},
+		{peerB, "a.test", portB},
+		{peerA, "a.test", portA},
+		{peerB, "b.test", portB},
+	} {
+		payload := []byte("packet " + strconv.Itoa(i))
+		n, err := conn.WriteTo(payload, &AddrEx{Host: tt.host, Port: tt.port})
+		require.NoError(t, err)
+		assert.Equal(t, len(payload), n)
+
+		require.NoError(t, tt.peer.SetReadDeadline(time.Now().Add(time.Second)))
+		n, _, err = tt.peer.ReadFrom(buf)
+		require.NoError(t, err, "packet %d to %s", i, tt.host)
+		assert.Equal(t, payload, buf[:n])
+	}
+	assert.Equal(t, map[string]int{"a.test": 1, "b.test": 1}, counts)
+}
+
+// A failed resolution is not kept: the next packet to the name resolves it again.
+func TestDirectOutboundUDPResolveError(t *testing.T) {
+	counts := fakeLookupIP(t, map[string][][]net.IP{
+		"a.test": {nil, {net.IPv4(127, 0, 0, 1)}, {net.IPv4(192, 0, 2, 1)}},
+	})
+
+	ob := NewDirectOutboundSimple(DirectOutboundModeAuto)
+	conn, err := ob.UDP(&AddrEx{Host: "a.test", Port: 1})
+	require.NoError(t, err)
+	defer conn.Close()
+
+	peer, port := udpTestPeer(t, "udp4", "127.0.0.1:0")
+
+	_, err = conn.WriteTo([]byte("test"), &AddrEx{Host: "a.test", Port: port})
+	assert.ErrorIs(t, err, resolveError{Err: assert.AnError})
+
+	buf := make([]byte, 1024)
+	for range 2 {
+		_, err = conn.WriteTo([]byte("test"), &AddrEx{Host: "a.test", Port: port})
+		require.NoError(t, err)
+		require.NoError(t, peer.SetReadDeadline(time.Now().Add(time.Second)))
+		n, _, err := peer.ReadFrom(buf)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("test"), buf[:n])
+	}
+	assert.Equal(t, map[string]int{"a.test": 2}, counts)
 }
 
 // A change of address must never be missed.

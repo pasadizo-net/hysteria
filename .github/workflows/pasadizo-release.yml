@@ -1,0 +1,54 @@
+# Release: on a tag like app/v2.14.0-pasadizo.1 (upstream's tag, then Pasadizo's
+# release number), run CI, build the linux amd64 and arm64 binaries with
+# upstream's build script, attest their build provenance, and publish them with
+# SHA256SUMS in a GitHub release.
+#
+# Upstream's release.yml, docker.yml and autotag.yaml are removed in this
+# repository: they would run on the same tags and publish to upstream's
+# download bucket, API and Docker Hub.
+name: pasadizo-release
+
+on:
+  push:
+    tags: ["app/v*-pasadizo.*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/pasadizo-ci.yml
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - name: Build
+        run: .github/pasadizo/build.sh
+      - name: The binary reports the tag's version
+        run: |
+          want="${GITHUB_REF_NAME#app/}"
+          build/hysteria-linux-amd64 version | tee version.txt
+          grep -Eq "^Version:[[:space:]]+${want//./\\.}$" version.txt
+      - uses: actions/attest@v4
+        with:
+          subject-checksums: build/SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Hysteria ${GITHUB_REF_NAME#app/}: upstream's ${GITHUB_REF_NAME%-pasadizo.*} with Pasadizo's changes (.github/README.md)."
+            echo
+            echo "Check a binary with \`sha256sum --ignore-missing -c SHA256SUMS\` and \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`."
+          } >notes.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "${GITHUB_REF_NAME#app/}" --notes-file notes.md \
+            build/hysteria-linux-amd64 build/hysteria-linux-arm64 build/SHA256SUMS

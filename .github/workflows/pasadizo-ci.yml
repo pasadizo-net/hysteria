@@ -1,0 +1,41 @@
+# Pasadizo CI: build the release binaries and test the package Pasadizo changes,
+# on every push to main and every pull request. Upstream's own workflows
+# (test.yml, master.yml, scripts.yml) run only on upstream's branch names, so
+# they do not run here.
+name: pasadizo-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          # The Go release upstream builds with (.github/workflows/build-common.yml)
+          go-version: "1.26"
+      - name: Build (linux amd64 and arm64, upstream's release flags)
+        run: .github/pasadizo/build.sh
+      - name: The binary reports its version
+        run: build/hysteria-linux-amd64 version
+      - name: Vet and test the package Pasadizo changes
+        working-directory: extras
+        run: |
+          go vet ./outbounds/...
+          go test -race -count=1 ./outbounds/...
+      - name: Format (gofumpt, as upstream checks it)
+        working-directory: extras
+        run: |
+          unformatted="$(go run mvdan.cc/gofumpt@latest -l -extra outbounds)"
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
