@@ -51,7 +51,7 @@ The version is the nearest `app/v*` tag, so a release build needs the tag and th
 
 ## Following upstream
 
-For a new upstream release, start a branch from upstream's new tag, cherry-pick the fix and the commit that adds this README and the workflows, and tag the result `app/v<version>-pasadizo.1`.
+Every Monday `pasadizo-sync` looks for a new upstream release (a tag `app/vX.Y.Z`). When there is one, it merges the tag into a branch `sync/app-vX.Y.Z`, builds and tests it, and opens a pull request; on a merge conflict it opens an issue instead. After the pull request is merged, tag `main` as `app/vX.Y.Z-pasadizo.1` to release it. It can also be started by hand (Actions, pasadizo-sync, Run workflow).
 
 ## License
 
