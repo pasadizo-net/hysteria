@@ -1,0 +1,117 @@
+# Weekly upstream sync: when Hysteria publishes a new release (a tag
+# app/vX.Y.Z), merge that tag into a new branch, build and test it, and open a
+# pull request against main. Nothing reaches main without a person reading the
+# upstream changes and merging the pull request. On a merge conflict it opens an
+# issue instead.
+#
+# It follows releases, not upstream's master: the servers run tagged versions,
+# and a release of this fork is the upstream tag plus Pasadizo's commits
+# (app/vX.Y.Z-pasadizo.N). After the merge, tag that version to release it.
+name: pasadizo-sync
+
+on:
+  schedule:
+    - cron: "47 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: https://github.com/HyNetworks/hysteria.git
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          # The Go release upstream builds with (.github/workflows/build-common.yml)
+          go-version: "1.26"
+      - name: Find the newest upstream release
+        id: fetch
+        run: |
+          git remote add upstream "$UPSTREAM"
+          # Upstream's tags only, under their own namespace, so they never
+          # mix with this fork's app/v*-pasadizo.* tags.
+          git fetch --no-tags upstream '+refs/tags/app/v*:refs/upstream-tags/app/v*'
+          tag="$(git for-each-ref --format='%(refname:strip=2)' 'refs/upstream-tags/app/' |
+            grep -E '^app/v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          [ -n "$tag" ] || { echo "No upstream release tag found." >&2; exit 1; }
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "version=${tag#app/v}" >>"$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "refs/upstream-tags/$tag" HEAD; then
+            echo "Upstream $tag is already in main."
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --heads origin "sync/app-v${tag#app/v}" >/dev/null; then
+            echo "A sync branch for $tag exists already; its pull request is open or was closed on purpose."
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Merge the upstream release
+        id: merge
+        if: steps.fetch.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="sync/app-v${{ steps.fetch.outputs.version }}"
+          echo "branch=$branch" >>"$GITHUB_OUTPUT"
+          git switch -c "$branch"
+          if ! git merge --no-ff -m "Merge upstream ${{ steps.fetch.outputs.tag }}" \
+            "refs/upstream-tags/${{ steps.fetch.outputs.tag }}"; then
+            git diff --name-only --diff-filter=U >conflicts.txt
+            git merge --abort
+            echo "conflict=true" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Report a conflict
+        if: steps.merge.outputs.conflict == 'true'
+        run: |
+          title="Upstream sync conflict at ${{ steps.fetch.outputs.tag }}"
+          body="Merging upstream ${{ steps.fetch.outputs.tag }} into main conflicts in:
+
+          $(sed 's/^/- /' conflicts.txt)
+
+          Resolve it by hand on a branch and open a pull request."
+          gh issue list --state open --search "$title in:title" --json number -q '.[].number' | grep -q . ||
+            gh issue create --title "$title" --body "$body"
+      # A pull request opened with the workflow's token does not start other
+      # workflows, so pasadizo-ci's steps run here.
+      - name: Build and test the merge
+        id: test
+        if: steps.fetch.outputs.skip != 'true' && steps.merge.outputs.conflict != 'true'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            .github/pasadizo/build.sh
+            build/hysteria-linux-amd64 version
+            cd extras
+            go vet ./outbounds/...
+            go test -race -count=1 ./outbounds/...
+          } 2>&1 | tee test.log
+      - name: Open the pull request
+        if: steps.fetch.outputs.skip != 'true' && steps.merge.outputs.conflict != 'true'
+        run: |
+          branch="${{ steps.merge.outputs.branch }}"
+          tag="${{ steps.fetch.outputs.tag }}"
+          git push origin "$branch"
+          result="passed"
+          [ "${{ steps.test.outcome }}" = "success" ] || result="FAILED (see the workflow run)"
+          bt='`'
+          log="$(git log --oneline --no-merges "HEAD^1..refs/upstream-tags/$tag" | head -100)"
+          body="Upstream released ${bt}${tag}${bt}. This merges it into main, on top of Pasadizo's commits.
+
+          Build and tests: ${result}.
+
+          Upstream commits since the last merged release:
+
+          ${bt}${bt}${bt}
+          ${log}
+          ${bt}${bt}${bt}
+
+          Read the upstream changes before merging: this code runs on the house's exits. After the merge, tag ${bt}${tag}-pasadizo.1${bt} on main to release it, then update the pinned version and sha256 in hatchup-infrastructure ${bt}roles/hysteria_home${bt}."
+          gh pr create --base main --head "$branch" --title "Sync upstream ${tag}" --body "$body"
