@@ -27,7 +27,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc
 	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
@@ -35,7 +35,7 @@ require (
 	github.com/apernet/quic-go v0.65.1-0.20261109005002-2895f039137a // indirect
 	github.com/caddyserver/zerossl v0.1.5 // indirect
 	github.com/database64128/netx-go v0.1.1 // indirect
-	github.com/database64128/tfo-go/v2 v2.3.3 // indirect
+	github.com/database64128/tfo-go/v2 v2.4.2 // indirect
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/florianl/go-nfqueue/v2 v2.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
