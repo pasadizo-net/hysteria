@@ -185,8 +185,15 @@ type serverConfigBandwidth struct {
 }
 
 type serverConfigCongestion struct {
-	Type       string `mapstructure:"type"`
-	BBRProfile string `mapstructure:"bbrProfile"`
+	Type          string                    `mapstructure:"type"`
+	BBRProfile    string                    `mapstructure:"bbrProfile"`
+	CarefulResume serverConfigCarefulResume `mapstructure:"carefulResume"`
+}
+
+type serverConfigCarefulResume struct {
+	Enabled   bool          `mapstructure:"enabled"`
+	Lifetime  time.Duration `mapstructure:"lifetime"`
+	StateFile string        `mapstructure:"stateFile"`
 }
 
 type serverConfigAuthHTTP struct {
@@ -1453,6 +1460,22 @@ func (c *serverConfig) fillCongestionConfig(hyConfig *server.Config) error {
 			return configError{Field: "congestion.bbrProfile", Err: err}
 		}
 		hyConfig.CongestionConfig.BBRProfile = normalizedProfile
+	}
+	if cr := c.Congestion.CarefulResume; cr.Enabled {
+		if normalizedType != congestionTypeBBR {
+			return configError{Field: "congestion.carefulResume.enabled", Err: errors.New("needs the bbr congestion type")}
+		}
+		if cr.Lifetime < 0 {
+			return configError{Field: "congestion.carefulResume.lifetime", Err: errors.New("must not be negative")}
+		}
+		hyConfig.CongestionConfig.CarefulResume = server.CarefulResumeConfig{
+			Enabled:   true,
+			Lifetime:  cr.Lifetime,
+			StateFile: cr.StateFile,
+			Logf: func(format string, a ...any) {
+				logger.Warn(fmt.Sprintf(format, a...))
+			},
+		}
 	}
 	return nil
 }
