@@ -1,6 +1,6 @@
 module github.com/apernet/hysteria/core/v2
 
-go 1.26.0
+go 1.27.4
 
 require (
 	github.com/apernet/quic-go v0.65.1-0.20261109005002-2895f039137a

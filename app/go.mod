@@ -1,6 +1,6 @@
 module github.com/apernet/hysteria/app/v2
 
-go 1.26.0
+go 1.27.4
 
 require (
 	github.com/apernet/go-tproxy v0.0.0-20230809025308-8f4723fd742f
