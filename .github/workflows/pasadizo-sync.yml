@@ -31,8 +31,8 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          # The Go release upstream builds with (.github/workflows/build-common.yml)
-          go-version: "1.26"
+          # The Go release in go.work (hyperbole.py refuses an older one)
+          go-version: "1.27.4"
       - name: Find the newest upstream release
         id: fetch
         run: |
