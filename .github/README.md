@@ -43,9 +43,11 @@ congestion:
     stateFile: /var/lib/hysteria/careful-resume.json # optional: keeps the values across restarts
 ```
 
+The state file is written every 10 s after a change and at stop. A state file that cannot be read or written is logged as a warning and never stops the server; values saved with a time in the future (a clock that was wrong, such as a Raspberry Pi before NTP) count as expired.
+
 It follows the phases of the RFC and its notes for BBR (Appendix C):
 
-- **Observing.** While a connection is in BBR's `PROBE_BW`, each round saves its bottleneck bandwidth, its minimum RTT and their product (`saved_cwnd`) for the client's IP address. The port is not part of the key, because a new connection comes from a new port. A sample taken while the sender was application limited replaces a saved value only when it is larger, and a path under four initial windows is not saved.
+- **Observing.** While a connection is in BBR's `PROBE_BW`, each round saves its bottleneck bandwidth, its minimum RTT and their product (`saved_cwnd`) for the client's IPv4 address, or the /64 of its IPv6 address. The port is not part of the key, because a new connection comes from a new port. The store holds at most 4096 clients: expired values are deleted every 10 s, and when it is full a new client takes the place of the one observed longest ago. A sample taken while the sender was application limited replaces a saved value only when it is larger, and a path under four initial windows is not saved.
 - **Reconnaissance.** A new connection from that address takes the saved values; only one connection at a time may use them (a claim runs out after 30 s). It sends as plain BBR. When the initial window is acknowledged, the path is confirmed if the minimum RTT is more than half and at most ten times the saved one.
 - **Unvalidated.** When the connection has more to send than BBR allows, while still in `STARTUP`, the window jumps to half the saved window and the pacing rate to half the saved bandwidth (never more than the jump window per current RTT), for at most one RTT.
 - **Validating.** The window is set to what is in flight and grows with the ACKs until the last unvalidated packet is acknowledged; then BBR goes on with the larger window.

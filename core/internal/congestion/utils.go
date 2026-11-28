@@ -45,8 +45,8 @@ const DefaultCarefulResumeLifetime = bbr.DefaultCarefulResumeLifetime
 
 // NewCarefulResumeStore makes a store for Careful Resume. See
 // bbr.NewCarefulResumeStore.
-func NewCarefulResumeStore(lifetime time.Duration, stateFile string) (*CarefulResumeStore, error) {
-	return bbr.NewCarefulResumeStore(lifetime, stateFile)
+func NewCarefulResumeStore(lifetime time.Duration, stateFile string, log func(format string, a ...any)) *CarefulResumeStore {
+	return bbr.NewCarefulResumeStore(lifetime, stateFile, log)
 }
 
 // UseBBR makes conn use BBR. With a non-nil carefulResume, BBR also uses

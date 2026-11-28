@@ -1472,6 +1472,9 @@ func (c *serverConfig) fillCongestionConfig(hyConfig *server.Config) error {
 			Enabled:   true,
 			Lifetime:  cr.Lifetime,
 			StateFile: cr.StateFile,
+			Logf: func(format string, a ...any) {
+				logger.Warn(fmt.Sprintf(format, a...))
+			},
 		}
 	}
 	return nil

@@ -51,11 +51,8 @@ func NewServer(config *Config) (Server, error) {
 		return nil, err
 	}
 	if cr := config.CongestionConfig.CarefulResume; cr.Enabled {
-		store, err := congestion.NewCarefulResumeStore(cr.Lifetime, cr.StateFile)
-		if err != nil {
-			return nil, err
-		}
-		config.carefulResume = store
+		config.carefulResume = congestion.NewCarefulResumeStore(cr.Lifetime, cr.StateFile, cr.Logf)
+		config.carefulResume.Start()
 	}
 	tlsConfig := convertToStdTLSConfig(config)
 	quicConfig := &quic.Config{

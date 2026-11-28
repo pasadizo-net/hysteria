@@ -283,11 +283,11 @@ func TestServerFillCongestionConfig(t *testing.T) {
 			},
 		}).fillCongestionConfig(hyConfig)
 		assert.NoError(t, err)
-		assert.Equal(t, server.CarefulResumeConfig{
-			Enabled:   true,
-			Lifetime:  time.Hour,
-			StateFile: "/tmp/cr.json",
-		}, hyConfig.CongestionConfig.CarefulResume)
+		cr := hyConfig.CongestionConfig.CarefulResume
+		assert.True(t, cr.Enabled)
+		assert.Equal(t, time.Hour, cr.Lifetime)
+		assert.Equal(t, "/tmp/cr.json", cr.StateFile)
+		assert.NotNil(t, cr.Logf)
 	})
 
 	t.Run("careful resume needs bbr", func(t *testing.T) {

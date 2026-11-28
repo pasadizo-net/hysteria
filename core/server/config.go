@@ -166,8 +166,12 @@ type CarefulResumeConfig struct {
 	// Lifetime is how long saved parameters may be reused after they were
 	// last observed. Zero means congestion.DefaultCarefulResumeLifetime.
 	Lifetime time.Duration
-	// StateFile, if set, keeps the saved parameters across restarts.
+	// StateFile, if set, keeps the saved parameters across restarts. A state
+	// file that cannot be read or written is logged through Logf and does not
+	// stop the server.
 	StateFile string
+	// Logf, if not nil, receives the warnings about the state file.
+	Logf func(format string, a ...any)
 }
 
 // RequestHook allows filtering and modifying requests before the server connects to the remote.
