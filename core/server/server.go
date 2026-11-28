@@ -50,6 +50,13 @@ func NewServer(config *Config) (Server, error) {
 	if err := config.fill(); err != nil {
 		return nil, err
 	}
+	if cr := config.CongestionConfig.CarefulResume; cr.Enabled {
+		store, err := congestion.NewCarefulResumeStore(cr.Lifetime, cr.StateFile)
+		if err != nil {
+			return nil, err
+		}
+		config.carefulResume = store
+	}
 	tlsConfig := convertToStdTLSConfig(config)
 	quicConfig := &quic.Config{
 		InitialStreamReceiveWindow:     config.QUICConfig.InitialStreamReceiveWindow,
@@ -85,6 +92,9 @@ func NewServer(config *Config) (Server, error) {
 	listener, err := tr.Listen(tlsConfig, quicConfig)
 	if err != nil {
 		err = errors.Join(err, tr.Close(), config.Conn.Close())
+		if config.carefulResume != nil {
+			err = errors.Join(err, config.carefulResume.Close())
+		}
 		if config.Cleanup != nil {
 			err = errors.Join(err, config.Cleanup.Close())
 		}
@@ -115,6 +125,9 @@ func (s *serverImpl) Serve() error {
 
 func (s *serverImpl) Close() error {
 	err := errors.Join(s.listener.Close(), s.tr.Close(), s.config.Conn.Close())
+	if s.config.carefulResume != nil {
+		err = errors.Join(err, s.config.carefulResume.Close())
+	}
 	if s.config.Cleanup != nil {
 		err = errors.Join(err, s.config.Cleanup.Close())
 	}
@@ -183,7 +196,7 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.authID = id
 			if h.config.IgnoreClientBandwidth {
 				// Ignore client bandwidth and use the configured congestion controller.
-				congestion.UseConfigured(h.conn, h.config.CongestionConfig.Type, h.config.CongestionConfig.BBRProfile)
+				congestion.UseConfigured(h.conn, h.config.CongestionConfig.Type, h.config.CongestionConfig.BBRProfile, h.config.carefulResume)
 				actualTx = 0
 			} else {
 				// actualTx = min(serverTx, clientRx)
@@ -196,7 +209,7 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					congestion.UseBrutal(h.conn, actualTx, h.config.BandwidthConfig.DisableLossCompensation)
 				} else {
 					// Client doesn't know its own bandwidth, use the configured congestion controller.
-					congestion.UseConfigured(h.conn, h.config.CongestionConfig.Type, h.config.CongestionConfig.BBRProfile)
+					congestion.UseConfigured(h.conn, h.config.CongestionConfig.Type, h.config.CongestionConfig.BBRProfile, h.config.carefulResume)
 				}
 			}
 			// Auth OK, send response

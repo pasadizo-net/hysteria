@@ -77,6 +77,10 @@ mimic:
 congestion:
   type: reno
   bbrProfile: aggressive
+  carefulResume:
+    enabled: true
+    lifetime: 15m
+    stateFile: /var/lib/hysteria/careful-resume.json
 
 bandwidth:
   up: 500 mbps

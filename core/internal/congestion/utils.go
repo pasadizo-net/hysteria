@@ -3,6 +3,7 @@ package congestion
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/apernet/hysteria/core/v2/internal/congestion/bbr"
 	"github.com/apernet/hysteria/core/v2/internal/congestion/brutal"
@@ -34,10 +35,37 @@ func NormalizeBBRProfile(profile string) (string, error) {
 	return string(normalized), nil
 }
 
-func UseBBR(conn *quic.Conn, profile bbr.Profile) {
+// CarefulResumeStore keeps the congestion control parameters that BBR saves
+// for Careful Resume (RFC 9959), one set per peer address.
+type CarefulResumeStore = bbr.CarefulResumeStore
+
+// DefaultCarefulResumeLifetime is the lifetime of saved parameters when the
+// configuration does not set one.
+const DefaultCarefulResumeLifetime = bbr.DefaultCarefulResumeLifetime
+
+// NewCarefulResumeStore makes a store for Careful Resume. See
+// bbr.NewCarefulResumeStore.
+func NewCarefulResumeStore(lifetime time.Duration, stateFile string) (*CarefulResumeStore, error) {
+	return bbr.NewCarefulResumeStore(lifetime, stateFile)
+}
+
+// UseBBR makes conn use BBR. With a non-nil carefulResume, BBR also uses
+// Careful Resume with the parameters saved there.
+func UseBBR(conn *quic.Conn, profile bbr.Profile, carefulResume *CarefulResumeStore) {
+	initialPacketSize := seedPacketSize(conn.InitialPacketSize(), bbr.GetInitialPacketSize(conn.RemoteAddr()))
+	if carefulResume != nil {
+		conn.SetCongestionControl(bbr.NewBbrSenderWithCarefulResume(
+			bbr.DefaultClock{},
+			initialPacketSize,
+			profile,
+			carefulResume,
+			conn.RemoteAddr(),
+		))
+		return
+	}
 	conn.SetCongestionControl(bbr.NewBbrSender(
 		bbr.DefaultClock{},
-		seedPacketSize(conn.InitialPacketSize(), bbr.GetInitialPacketSize(conn.RemoteAddr())),
+		initialPacketSize,
 		profile,
 	))
 }
@@ -62,11 +90,11 @@ func UseBrutal(conn *quic.Conn, tx uint64, disableLossCompensation bool) {
 	conn.SetCongestionControl(brutal.NewBrutalSender(tx, disableLossCompensation))
 }
 
-func UseConfigured(conn *quic.Conn, congestionType, bbrProfile string) {
+func UseConfigured(conn *quic.Conn, congestionType, bbrProfile string, carefulResume *CarefulResumeStore) {
 	switch congestionType {
 	case TypeReno:
 		return
 	default:
-		UseBBR(conn, bbr.Profile(bbrProfile))
+		UseBBR(conn, bbr.Profile(bbrProfile), carefulResume)
 	}
 }

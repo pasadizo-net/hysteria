@@ -150,7 +150,7 @@ func (c *clientImpl) connect() (*HandshakeInfo, error) {
 	if authResp.RxAuto {
 		// Server asks client to use bandwidth detection,
 		// ignore local bandwidth config and use the configured congestion controller.
-		congestion.UseConfigured(conn, c.config.CongestionConfig.Type, c.config.CongestionConfig.BBRProfile)
+		congestion.UseConfigured(conn, c.config.CongestionConfig.Type, c.config.CongestionConfig.BBRProfile, nil)
 	} else {
 		// actualTx = min(serverRx, clientTx)
 		actualTx = authResp.Rx
@@ -162,7 +162,7 @@ func (c *clientImpl) connect() (*HandshakeInfo, error) {
 			congestion.UseBrutal(conn, actualTx, c.config.BandwidthConfig.DisableLossCompensation)
 		} else {
 			// We don't know our own bandwidth either, use the configured congestion controller.
-			congestion.UseConfigured(conn, c.config.CongestionConfig.Type, c.config.CongestionConfig.BBRProfile)
+			congestion.UseConfigured(conn, c.config.CongestionConfig.Type, c.config.CongestionConfig.BBRProfile, nil)
 		}
 	}
 	_ = resp.Body.Close()

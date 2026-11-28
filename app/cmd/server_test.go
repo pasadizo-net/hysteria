@@ -106,6 +106,11 @@ func TestServerConfig(t *testing.T) {
 		Congestion: serverConfigCongestion{
 			Type:       "reno",
 			BBRProfile: "aggressive",
+			CarefulResume: serverConfigCarefulResume{
+				Enabled:   true,
+				Lifetime:  15 * time.Minute,
+				StateFile: "/var/lib/hysteria/careful-resume.json",
+			},
 		},
 		Bandwidth: serverConfigBandwidth{
 			Up:                      "500 mbps",
@@ -264,6 +269,35 @@ func TestServerFillCongestionConfig(t *testing.T) {
 			Congestion: serverConfigCongestion{Type: "cubic"},
 		}).fillCongestionConfig(&server.Config{})
 		assert.EqualError(t, err, `invalid config: congestion.type: unsupported congestion type "cubic"`)
+	})
+
+	t.Run("careful resume with bbr", func(t *testing.T) {
+		hyConfig := &server.Config{}
+		err := (&serverConfig{
+			Congestion: serverConfigCongestion{
+				CarefulResume: serverConfigCarefulResume{
+					Enabled:   true,
+					Lifetime:  time.Hour,
+					StateFile: "/tmp/cr.json",
+				},
+			},
+		}).fillCongestionConfig(hyConfig)
+		assert.NoError(t, err)
+		assert.Equal(t, server.CarefulResumeConfig{
+			Enabled:   true,
+			Lifetime:  time.Hour,
+			StateFile: "/tmp/cr.json",
+		}, hyConfig.CongestionConfig.CarefulResume)
+	})
+
+	t.Run("careful resume needs bbr", func(t *testing.T) {
+		err := (&serverConfig{
+			Congestion: serverConfigCongestion{
+				Type:          "reno",
+				CarefulResume: serverConfigCarefulResume{Enabled: true},
+			},
+		}).fillCongestionConfig(&server.Config{})
+		assert.EqualError(t, err, `invalid config: congestion.carefulResume.enabled: needs the bbr congestion type`)
 	})
 
 	t.Run("rejects invalid bbr profile", func(t *testing.T) {

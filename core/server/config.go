@@ -41,6 +41,10 @@ type Config struct {
 	EventLogger           EventLogger
 	TrafficLogger         TrafficLogger
 	MasqHandler           http.Handler
+
+	// carefulResume is the store NewServer makes when
+	// CongestionConfig.CarefulResume is enabled.
+	carefulResume *congestion.CarefulResumeStore
 }
 
 // fill fills the fields that are not set by the user with default values when possible,
@@ -91,6 +95,17 @@ func (c *Config) fill() error {
 			return errors.ConfigError{Field: "CongestionConfig.BBRProfile", Reason: err.Error()}
 		}
 	}
+	if cr := &c.CongestionConfig.CarefulResume; cr.Enabled {
+		if c.CongestionConfig.Type != congestion.TypeBBR {
+			return errors.ConfigError{Field: "CongestionConfig.CarefulResume.Enabled", Reason: "needs the bbr congestion type"}
+		}
+		if cr.Lifetime < 0 {
+			return errors.ConfigError{Field: "CongestionConfig.CarefulResume.Lifetime", Reason: "must not be negative"}
+		}
+		if cr.Lifetime == 0 {
+			cr.Lifetime = congestion.DefaultCarefulResumeLifetime
+		}
+	}
 	if c.Conn == nil {
 		return errors.ConfigError{Field: "Conn", Reason: "must be set"}
 	}
@@ -137,8 +152,22 @@ type QUICConfig struct {
 }
 
 type CongestionConfig struct {
-	Type       string
-	BBRProfile string
+	Type          string
+	BBRProfile    string
+	CarefulResume CarefulResumeConfig
+}
+
+// CarefulResumeConfig turns on Careful Resume (RFC 9959) for BBR: the server
+// saves the capacity it observes to each client address, and a new
+// connection from that address starts from half of it, once the path is
+// confirmed, instead of from slow start.
+type CarefulResumeConfig struct {
+	Enabled bool
+	// Lifetime is how long saved parameters may be reused after they were
+	// last observed. Zero means congestion.DefaultCarefulResumeLifetime.
+	Lifetime time.Duration
+	// StateFile, if set, keeps the saved parameters across restarts.
+	StateFile string
 }
 
 // RequestHook allows filtering and modifying requests before the server connects to the remote.
